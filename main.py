@@ -12,7 +12,7 @@ import api
 import sys
 import os
 
-api.logging = "--debug" in sys.argv
+api.logging = "--debug-api" in sys.argv
 ver = "1.0-dev"
 
 if os.path.isfile("discord_token.txt"):
@@ -141,7 +141,7 @@ msgs_lim = 500
 msglines = []
 
 def debug_print(*args, sep=" ", end="\n"):
-    open("debug.txt", "a").write(sep.join(map(str, args)) + end)
+    if "--debug" in sys.argv: open("debug.txt", "a").write(sep.join(map(str, args)) + end)
 
 def draw_chat(scr, channel, mode, sel_msg, render_window, attachment_sel):
     global msgs, msglines, messages_cache
@@ -165,8 +165,6 @@ def draw_chat(scr, channel, mode, sel_msg, render_window, attachment_sel):
         for k1, j in enumerate(cp):
             if k1 == 0: subbuf.append(f"{author_str}{j}")
             else: subbuf.append(f"{blank_author_str}{j}")
-        
-        msglines.append(len(cp))
 
         if len(i['attachments']) > 0:
             subbuf.append("   attachments:")
@@ -175,9 +173,8 @@ def draw_chat(scr, channel, mode, sel_msg, render_window, attachment_sel):
                     if attachment_sel[1] == k1: subbuf.append(f"   > {j['filename']}")
                     else: subbuf.append(f"   | {j['filename']}")
                 else: subbuf.append(f"     {j['filename']}")
+        msglines.append(len(subbuf))
         buf += subbuf[::-1]
-
-    debug_print(buf)
 
     for k, i in enumerate(buf[render_window:render_window+curses.LINES-2]):
         scr.addstr(curses.LINES-k-2, 0, i)
@@ -188,9 +185,6 @@ def draw_chat(scr, channel, mode, sel_msg, render_window, attachment_sel):
         else:
             scr.addstr(curses.LINES-1, 0, "[^] [v]; [o]pen, [c]opy url")
 
-def normalize(string):
-    return string.decode('utf-8')
-
 def construct_channel_label(channel):
     length = curses.COLS-2
     start = (('#' if channel['type'] == 0 else '') + channel['name']) if 'name' in channel else channel["recipients"][0]["username"] 
@@ -200,16 +194,21 @@ def construct_channel_label(channel):
     else: return " " + start + " " * spaces + end
 
 def compute_cursor(msg):
-    return sum(msglines[:msg])
+    return sum(msglines[:msg+1])
 
-def update_cursor(cur, direction, render_window):
-    cursor = compute_cursor(cur+direction)
-    new_rw = render_window
-    if cur < render_window:
-        new_rw = render_window - 1
-    elif cur-curses.LINES > render_window:
-        new_rw = render_window + 1
-    return cur+direction, new_rw
+def update_cursor(cur, direction, render_window, msgs_count):
+    global limit
+    if 0 <= cur+direction < msgs_count:
+        cursor = compute_cursor(cur+direction)
+        new_rw = render_window
+        if cursor <= render_window:
+            new_rw = cursor-1
+        elif cursor > render_window+curses.LINES-2:
+            new_rw = cursor-curses.LINES+2
+        return cur+direction, new_rw
+    elif cur+direction < msgs_count:
+        limit += 50
+    else: return cur, render_window
 
 def clear_status(scr):
     scr.addstr(curses.LINES-1, 0, " " * (curses.COLS-1))
@@ -226,9 +225,11 @@ def get_str(scr):
         else: string += ch
         first = (len(string)+1) // (curses.COLS - 1) == 0
         last_str = string[(len(string)+1) // (curses.COLS - 1)*(curses.COLS - 1):]
-        scr.addstr(curses.LINES-1, 0, ("~ " if first else "/ ") + last_str)
+        scr.addstr(curses.LINES-1, 0, ("~ " if first else "- ") + last_str)
         ch = scr.get_wch()
     return string
+
+limit = 50
 
 def curses_interactive(channel, scr):
     global msgs, keys, update_thread, channel_cache, messages_cache
@@ -256,7 +257,7 @@ def curses_interactive(channel, scr):
     while True:
         if channel['id'] not in messages_cache or messages_cache[channel['id']] is None or msgs > msgs_lim:
             msgs = 0
-            messages_cache[channel['id']] = api.get_messages(token, channel['id'])
+            messages_cache[channel['id']] = api.get_messages(token, channel['id'], limit=limit)
         
         if messages_cache[channel['id']] != old_msgs or mode != old_mode or render_window != old_rw or sel_msg != old_sm or attachment_sel != old_a:
             scr.clear()
@@ -279,12 +280,12 @@ def curses_interactive(channel, scr):
             elif mode == 0: break
         if key == curses.KEY_UP and mode == 2:
             if attachment_sel is None:
-                sel_msg, render_window = update_cursor(sel_msg, 1, render_window)
+                sel_msg, render_window = update_cursor(sel_msg, 1, render_window, len(messages_cache[channel['id']]))
             else:
                 attachment_sel[1] = (attachment_sel[1] - 1) % len(messages_cache[channel['id']][sel_msg]['attachments'])
         if key == curses.KEY_DOWN and mode == 2:
             if attachment_sel is None:
-                sel_msg, render_window = update_cursor(sel_msg, -1, render_window)
+                sel_msg, render_window = update_cursor(sel_msg, -1, render_window, len(messages_cache[channel['id']]))
             else:
                 attachment_sel[1] = (attachment_sel[1] + 1) % len(messages_cache[channel['id']][sel_msg]['attachments'])
         if key == ord("r") and mode == 2:
@@ -309,7 +310,6 @@ def curses_interactive(channel, scr):
         if mode == 1:
             scr.nodelay(False)
             curses.curs_set(1)
-            scr.addstr("~ ")
             curses.echo()
             message = get_str(scr)
             curses.noecho()
@@ -320,6 +320,7 @@ def curses_interactive(channel, scr):
             reply = None
             scr.nodelay(True)
         #scr.refresh()
+        curses.update_lines_cols()
         old_msgs = messages_cache[channel['id']]
         #time.sleep(1/2)
 
@@ -328,10 +329,12 @@ def interactive(chat, f):
     
     if ":" not in chat or len(chat) < 3:
         print("invalid chat id (no colon)")
-    
+        return
+
     server_id, chat_id = chat.split(":")
     if not ((isint(server_id) or server_id == "d") and isint(chat_id)):
         print("invalid chat id (NaN)")
+        return
 
     if server_id == "d":
         if dm_cache is None or f: dm_cache = sorted(api.get_dms(token), key=lambda x: int(x['last_message_id'] if 'last_message_id' in x and x['last_message_id'] is not None else x['id']))
