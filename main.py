@@ -157,7 +157,7 @@ def draw_chat(scr, channel, mode, sel_msg, render_window, attachment_sel):
         author_str = ((">" if sel_msg == k and attachment_sel is None else " ") if mode == 2 else "") + f" {i['author']['username']}: "
         blank_author_str = len(author_str) * " "
         content = i["content"]
-        if 'referenced_message' in i:
+        if 'referenced_message' in i and i['referenced_message'] is not None:
             content = f"@{i['referenced_message']['author']['username']} " + content
         slen = curses.COLS-len(author_str)-1
         cp = split(content, slen)
@@ -211,9 +211,24 @@ def update_cursor(cur, direction, render_window):
         new_rw = render_window + 1
     return cur+direction, new_rw
 
-def clear_status():
+def clear_status(scr):
     scr.addstr(curses.LINES-1, 0, " " * (curses.COLS-1))
     scr.move(curses.LINES-1, 0)
+
+def get_str(scr):
+    clear_status(scr)
+    scr.addstr(curses.LINES-1, 0, "~ ")
+    string = ""
+    ch = scr.get_wch()
+    while ch != "\n":
+        clear_status(scr)
+        if ch == curses.KEY_BACKSPACE: string = string[:-1]
+        else: string += ch
+        first = (len(string)+1) // (curses.COLS - 1) == 0
+        last_str = string[(len(string)+1) // (curses.COLS - 1)*(curses.COLS - 1):]
+        scr.addstr(curses.LINES-1, 0, ("~ " if first else "/ ") + last_str)
+        ch = scr.get_wch()
+    return string
 
 def curses_interactive(channel, scr):
     global msgs, keys, update_thread, channel_cache, messages_cache
@@ -293,12 +308,14 @@ def curses_interactive(channel, scr):
         
         if mode == 1:
             scr.nodelay(False)
+            curses.curs_set(1)
             scr.addstr("~ ")
             curses.echo()
-            message = normalize(scr.getstr())
+            message = get_str(scr)
             curses.noecho()
-            clear_status()
+            clear_status(scr)
             mode = 0
+            curses.curs_set(0)
             api.send_message(token, channel['id'], message, reply=(channel['id'], channel['guild_id'], messages_cache[channel['id']][reply]['id']) if reply is not None else None)
             reply = None
             scr.nodelay(True)
