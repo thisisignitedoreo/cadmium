@@ -73,9 +73,10 @@ def get_dms(token):
     if logging: print("           " + str(data))
     return data
 
-def get_messages(token, channel_id, limit=50):
+def get_messages(token, channel_id, limit=50, before=None):
     if logging: print(datetime.datetime.now().strftime("[%H:%M:%S]") + " get messages request")
-    data = requests.get(basename + f"/channels/{channel_id}/messages?limit={limit}",
+    data = requests.get(basename + f"/channels/{channel_id}/messages",
+                        params={"limit": limit, "before": before},
                         headers={"Authorization": token}).json()
     if logging: print("           " + str(data))
     return data

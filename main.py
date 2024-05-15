@@ -143,6 +143,34 @@ msglines = []
 def debug_print(*args, sep=" ", end="\n"):
     if "--debug" in sys.argv: open("debug.txt", "a").write(sep.join(map(str, args)) + end)
 
+def get_username(msgs, uid):
+    for i in msgs:
+        if i['author']['id'] == uid: return i['author']['username']
+    return uid
+
+def interpret(buf, channel):
+    global messages_cache
+    debug_print(buf)
+    if buf.startswith("@"): return "@" + get_username(messages_cache[channel], buf[1:])
+
+def format_content(content, channel):
+    result = ""
+    n = 0
+    while n < len(content):
+        if content[n] == "<":
+            buf = ""
+            while content[n] != ">":
+                if n+1 >= len(content): break
+                n += 1
+                buf += content[n]
+            buf = buf[:-1]
+            interpretted = interpret(buf, channel)
+            if interpretted: result += interpretted
+            else: result += "<" + buf + ">"
+        else: result += content[n]
+        n += 1
+    return result
+
 def draw_chat(scr, channel, mode, sel_msg, render_window, attachment_sel):
     global msgs, msglines, messages_cache
     if len(messages_cache[channel['id']]) == 0:
@@ -156,7 +184,7 @@ def draw_chat(scr, channel, mode, sel_msg, render_window, attachment_sel):
         subbuf = []
         author_str = ((">" if sel_msg == k and attachment_sel is None else " ") if mode == 2 else "") + f" {i['author']['username']}: "
         blank_author_str = len(author_str) * " "
-        content = i["content"]
+        content = format_content(i["content"], channel['id'])
         if 'referenced_message' in i and i['referenced_message'] is not None:
             content = f"@{i['referenced_message']['author']['username']} " + content
         slen = curses.COLS-len(author_str)-1
@@ -206,9 +234,9 @@ def update_cursor(cur, direction, render_window, msgs_count):
         elif cursor > render_window+curses.LINES-2:
             new_rw = cursor-curses.LINES+2
         return cur+direction, new_rw
-    elif cur+direction < msgs_count:
-        limit += 50
-    else: return cur, render_window
+    elif cur+direction >= msgs_count:
+        limit += 1
+    return cur, render_window
 
 def clear_status(scr):
     scr.addstr(curses.LINES-1, 0, " " * (curses.COLS-1))
@@ -229,7 +257,14 @@ def get_str(scr):
         ch = scr.get_wch()
     return string
 
-limit = 50
+limit = 1
+limit_length = 50
+
+def fetch_messages(token, channel):
+    result = []
+    for i in range(limit):
+        result += api.get_messages(token, channel, limit=limit_length, before=result[-1]['id'] if len(result) > 0 else None)
+    return result
 
 def curses_interactive(channel, scr):
     global msgs, keys, update_thread, channel_cache, messages_cache
@@ -254,12 +289,13 @@ def curses_interactive(channel, scr):
     old_rw = None
     old_sm = None
     old_a = None
+    old_size = curses.LINES, curses.COLS
     while True:
-        if channel['id'] not in messages_cache or messages_cache[channel['id']] is None or msgs > msgs_lim:
+        if channel['id'] not in messages_cache or messages_cache[channel['id']] is None or msgs > msgs_lim or limit != old_limit:
             msgs = 0
-            messages_cache[channel['id']] = api.get_messages(token, channel['id'], limit=limit)
+            messages_cache[channel['id']] = fetch_messages(token, channel['id'])
         
-        if messages_cache[channel['id']] != old_msgs or mode != old_mode or render_window != old_rw or sel_msg != old_sm or attachment_sel != old_a:
+        if messages_cache[channel['id']] != old_msgs or mode != old_mode or render_window != old_rw or sel_msg != old_sm or attachment_sel != old_a or old_size != (curses.LINES, curses.COLS):
             scr.clear()
             scr.addstr(0, 0, construct_channel_label(channel))
             draw_chat(scr, channel, mode, sel_msg, render_window, attachment_sel)
@@ -268,6 +304,8 @@ def curses_interactive(channel, scr):
         old_rw = render_window
         old_sm = sel_msg
         old_a = copy.copy(attachment_sel)
+        old_size = curses.LINES, curses.COLS
+        old_limit = limit
 
         msgs += 1
         scr.move(curses.LINES-1, 0)
