@@ -148,10 +148,19 @@ def get_username(msgs, uid):
         if i['author']['id'] == uid: return i['author']['username']
     return uid
 
+def get_channel(channels, cid):
+    debug_print(channels)
+    for i in channels:
+        if i['id'] == cid: return i['name']
+    return cid
+
+guild = None
+
 def interpret(buf, channel):
-    global messages_cache
+    global guild, messages_cache
     debug_print(buf)
     if buf.startswith("@"): return "@" + get_username(messages_cache[channel], buf[1:])
+    if buf.startswith("#"): return "#" + get_channel(channel_cache[guild], buf[1:])
 
 def format_content(content, channel):
     result = ""
@@ -160,12 +169,11 @@ def format_content(content, channel):
         if content[n] == "<":
             buf = ""
             while content[n] != ">":
-                if n+1 >= len(content): break
+                if n+1 >= len(content): return result + "<" + buf
                 n += 1
                 buf += content[n]
-            buf = buf[:-1]
-            interpretted = interpret(buf, channel)
-            if interpretted: result += interpretted
+            interpretted = interpret(buf[:-1], channel)
+            if interpretted: result += "<" + interpretted + ">"
             else: result += "<" + buf + ">"
         else: result += content[n]
         n += 1
@@ -242,7 +250,7 @@ def clear_status(scr):
     scr.addstr(curses.LINES-1, 0, " " * (curses.COLS-1))
     scr.move(curses.LINES-1, 0)
 
-def get_str(scr):
+def get_str(scr, channel):
     clear_status(scr)
     scr.addstr(curses.LINES-1, 0, "~ ")
     string = ""
@@ -250,9 +258,12 @@ def get_str(scr):
     while ch != "\n":
         clear_status(scr)
         if ch == curses.KEY_BACKSPACE: string = string[:-1]
+        elif not isinstance(ch, str):
+            pass
         else: string += ch
-        first = (len(string)+1) // (curses.COLS - 1) == 0
-        last_str = string[(len(string)+1) // (curses.COLS - 1)*(curses.COLS - 1):]
+        draw_str = format_content(string, channel)
+        first = (len(draw_str)+1) // (curses.COLS - 1) == 0
+        last_str = draw_str[(len(draw_str)+1) // (curses.COLS - 1)*(curses.COLS - 1):]
         scr.addstr(curses.LINES-1, 0, ("~ " if first else "- ") + last_str)
         ch = scr.get_wch()
     return string
@@ -349,7 +360,7 @@ def curses_interactive(channel, scr):
             scr.nodelay(False)
             curses.curs_set(1)
             curses.echo()
-            message = get_str(scr)
+            message = get_str(scr, channel['id'])
             curses.noecho()
             clear_status(scr)
             mode = 0
@@ -363,7 +374,7 @@ def curses_interactive(channel, scr):
         #time.sleep(1/2)
 
 def interactive(chat, f):
-    global dm_cache, server_cache, channel_cache
+    global guild, dm_cache, server_cache, channel_cache
     
     if ":" not in chat or len(chat) < 3:
         print("invalid chat id (no colon)")
@@ -384,6 +395,8 @@ def interactive(chat, f):
         if dcid["type"] == 4:
             print("you cant chat in category")
             return
+
+    guild = server_id
 
     curses.wrapper(lambda x: curses_interactive(dcid, x))
 
